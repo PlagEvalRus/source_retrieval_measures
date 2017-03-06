@@ -136,15 +136,20 @@ class BaseCalc(object):
 
     def _transform_detections(self, detections_index):
         for susp_id in self._sources_index:
-            if susp_id not in detections_index:
-                detections = []
-            else:
-                detections = detections_index[susp_id]
-
+            detections = detections_index.get(susp_id, [])
             try:
                 self._try_transform_one_detection(susp_id, detections)
             except Exception as e:
                 logging.error("Failed to parse meta for %s: %s", susp_id, e)
+
+    def _is_dupl(self, susp_id, det):
+        if det["id"] == susp_id:
+            #the found document is the query document
+            return True
+
+        if self._duplicates_tester is not None:
+            return self._duplicates_tester(susp_id, det)
+
 
     def _try_transform_one_detection(self, susp_id, detections):
         true_sources = frozenset(src["id"] for src in self._sources_index[susp_id])
@@ -153,8 +158,7 @@ class BaseCalc(object):
         for det in detections:
             if det["id"] in true_sources:
                 annotated_detections.append(DetectionKind.TP)
-            elif self._duplicates_tester is not None and \
-                 self._duplicates_tester(susp_id, det):
+            elif self._is_dupl(susp_id, det):
                 annotated_detections.append(DetectionKind.DUP)
             else:
                 annotated_detections.append(DetectionKind.FP)
@@ -364,18 +368,18 @@ class CalcTestCase(unittest.TestCase):
 
     def _create_calc(self, detections, micro = False):
         sources_index = {
-            "1" : [{"id": 10}, {"id": 11}, {"id": 12}],
-            "2" : [{"id": 20}, {"id": 21}],
-            "3" : [{"id": 30}, {"id": 31}, {"id": 32}, {"id": 33}]}
+            "1" : [{"id": "10"}, {"id": "11"}, {"id": "12"}],
+            "2" : [{"id": "20"}, {"id": "21"}],
+            "3" : [{"id": "30"}, {"id": "31"}, {"id": "32"}, {"id": "33"}]}
         opts = BaseCalcOpts(micro)
 
         return Calc(opts, detections, sources_index)
 
     def simple_test(self):
         detections_index = {
-            "1" : [{"id": 10}, {"id": 11}, {"id": 12}],
-            "2" : [{"id": 20}, {"id": 21}],
-            "3" : [{"id": 30}, {"id": 31}, {"id": 32}, {"id": 33}]}
+            "1" : [{"id": "10"}, {"id": "11"}, {"id": "12"}],
+            "2" : [{"id": "20"}, {"id": "21"}],
+            "3" : [{"id": "30"}, {"id": "31"}, {"id": "32"}, {"id": "33"}]}
         calc = self._create_calc(detections_index)
         measures = calc()
         self.assertEqual(1.0, measures[MT.FMEASURE])
@@ -383,8 +387,8 @@ class CalcTestCase(unittest.TestCase):
 
     def detection_missing_test(self):
         detections_index = {
-            "1" : [{"id": 10}, {"id": 11}, {"id": 12}],
-            "2" : [{"id": 20}, {"id": 21}]
+            "1" : [{"id": "10"}, {"id": "11"}, {"id": "12"}],
+            "2" : [{"id": "20"}, {"id": "21"}]
             }
         calc = self._create_calc(detections_index)
         measures = calc()
@@ -394,9 +398,9 @@ class CalcTestCase(unittest.TestCase):
 
     def partial_detection_test(self):
         detections_index = {
-            "1" : [{"id": 40}, {"id": 41}, {"id": 12}, {"id": 42}],
-            "2" : [{"id": 20}, {"id": 43}],
-            "3" : [{"id": 44}, {"id": 32}, {"id": 31}, {"id": 45}, {"id": 46}, {"id": 47}]
+            "1" : [{"id": "40"}, {"id": "41"}, {"id": "12"}, {"id": "42"}],
+            "2" : [{"id": "20"}, {"id": "43"}],
+            "3" : [{"id": "44"}, {"id": "32"}, {"id": "31"}, {"id": "45"}, {"id": "46"}, {"id": "47"}]
             }
         calc = self._create_calc(detections_index)
         measures = calc()
@@ -412,12 +416,23 @@ class CalcTestCase(unittest.TestCase):
 
     def micro_test(self):
         detections_index = {
-            "1" : [{"id": 40}, {"id": 41}, {"id": 12}, {"id": 42}],
-            "2" : [{"id": 20}, {"id": 43}],
-            "3" : [{"id": 44}, {"id": 32}, {"id": 31}, {"id": 45}, {"id": 46}, {"id": 47}]
+            "1" : [{"id": "40"}, {"id": "41"}, {"id": "12"}, {"id": "42"}],
+            "2" : [{"id": "20"}, {"id": "43"}],
+            "3" : [{"id": "44"}, {"id": "32"}, {"id": "31"}, {"id": "45"}, {"id": "46"}, {"id": "47"}]
             }
         calc = self._create_calc(detections_index, micro = True)
         measures = calc()
 
         self.assertAlmostEqual(4/12.0, measures[MT.PRECISION])
         self.assertAlmostEqual(4/9.0, measures[MT.RECALL])
+
+    def dupl_test(self):
+        detections_index = {
+            "1" : [{"id": "1"}, {"id": "10"}, {"id": "11"}, {"id": "12"}],
+            "2" : [{"id": "2"}, {"id": "20"}, {"id": "21"}],
+            "3" : [{"id": "3"}, {"id": "30"}, {"id": "31"}, {"id": "32"}, {"id": "33"}]}
+
+        calc = self._create_calc(detections_index)
+        measures = calc()
+        self.assertEqual(1.0, measures[MT.FMEASURE])
+        self.assertEqual(1.0, measures[MT.MEAN_AVG_PREC])
